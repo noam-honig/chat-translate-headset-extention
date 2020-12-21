@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "text2speach1": {
+      "commandName": "Project",
+      "commandLineArgs": "rec dump.wav -b 16000"
+    }
+  }
+}
