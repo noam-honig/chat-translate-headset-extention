@@ -18,7 +18,7 @@
 using Google.Cloud.Speech.V1;
 using Google.Protobuf;
 
-using NAudio.Wave;
+// using NAudio.Wave;
 
 using System;
 using System.Collections.Concurrent;
@@ -32,78 +32,50 @@ using CSCore.CoreAudioAPI;
 using CSCore.SoundIn;
 using CSCore.Streams;
 using WasapiLoopbackCapture = CSCore.SoundIn.WasapiLoopbackCapture;
+using WaveFormat = CSCore.WaveFormat;
+
 using RestSharp;
-
-public class myctRequest
-{
-    public Message message { get; set; }
-}
-
-public class Message
-{
-    public string text { get; set; }
-    public string translatedText { get; set; }
-    public int id { get; set; }
-    public string userName { get; set; }
-    public bool presenter { get; set; }
-    public string fromLanguage { get; set; }
-    public string toLanguage { get; set; }
-    public string conversation { get; set; }
-    public bool isFinal { get; set; }
-}
-
-public class getIdResponse
-{
-    public int id { get; set; }
-}
-
+using System.Configuration;
 
 namespace GoogleCloudSamples
 {
-
+    /// <summary>
+    /// 
+    /// </summary>
     class Program
     {
-        const string apikey = @"D:\code\firefly\fireflyrecognize-googleapikey_11a3398d323c.json";
+
+
         static void Main(string[] args)
         {
 
 
-
-
-            //       Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", apikey);
             var ct = new CancellationTokenSource();
 
-            if (false)
-            {
-                using (var i = InfiniteStreaming.ListenToMyMic(new MyctBridge(args[0])))
-                {
-                    Console.WriteLine("Listening, say exit to stop");
-                    i.RecognizeAsync(ct.Token).Wait();
-
-                    ct.Cancel();
-                    return;
-
-                }
-            }
             using (var i = InfiniteStreaming.ListenToWhatsPlayingOnMyHeadset(new MyctBridge(args[0])))
             {
-                Console.WriteLine("Listening, say exit to stop");
+                Console.WriteLine($"Listening to it, say exit to stop");
                 i.RecognizeAsync(ct.Token).Wait();
 
                 ct.Cancel();
-
+                return;
 
             }
+
+
+
+
         }
 
     }
+
 
     /// <summary>
     /// Sample code for infinite streaming. The strategy for infinite streaming is to restart each stream
     /// shortly before it would time out (currently at 5 minutes). We keep track of the end result time of
     /// of when we last saw a "final" transcription, and resend the audio data we'd recorded past that point.
     /// </summary>
-    public class InfiniteStreaming : IDisposable
+    public class InfiniteStreaming : IDisposable, IInfiniteStreaming
     {
         private const int SampleRate = 16000;
         private const int ChannelCount = 1;
@@ -148,8 +120,14 @@ namespace GoogleCloudSamples
         private WasapiCapture _soundIn;
         private SoundInSource _soundInSource;
         private IWaveSource _convertedSource;
-        private WasapiCapture _headphones;
+
         private CaptureMode _captureMode;
+        MyctBridge _myct;
+        private bool _hasText;
+        private DateTime _lastText;
+        private string _lastTranscript;
+        private bool _lastTranscriptWasFinal;
+        private IDictionary<string, string> _languageMaps;
 
         public static InfiniteStreaming ListenToMyMic(MyctBridge myct)
         {
@@ -188,7 +166,8 @@ namespace GoogleCloudSamples
             {
                 await MaybeStartStreamAsync();
                 // ProcessResponses will return false if it hears "exit" or "quit".
-                if (!ProcessResponses())
+                var result = await ProcessResponses();
+                if (result == false)
                 {
                     Console.WriteLine("User Exited");
 
@@ -200,6 +179,24 @@ namespace GoogleCloudSamples
 
         }
 
+        private string MapLanguageCodeToGoogleLanguage(string languageCode)
+        {
+            if (_languageMaps == null)
+            {
+                _languageMaps = new Dictionary<string, string>()
+                {
+                    { "es", "es-ES"},
+                    { "en", "en-US" }
+                };
+            }
+
+            string mappedLanguage;
+            if (!_languageMaps.TryGetValue(languageCode, out mappedLanguage))
+            {
+                return languageCode;
+            }
+            return mappedLanguage;
+        }
         /// <summary>
         /// Starts a new RPC streaming call if necessary. This will be if either it's the first call
         /// (so we don't have a current request) or if the current request will time out soon.
@@ -223,7 +220,10 @@ namespace GoogleCloudSamples
                 //Console.WriteLine("We already have a google stream");
                 return;
             }
-            Console.WriteLine("Creating new google stream");
+
+            var translationLanguage = MapLanguageCodeToGoogleLanguage(_myct.FromLang);
+
+            Console.WriteLine($"Creating new google stream to translate from {translationLanguage}");
             // We need to create a new stream, either because we're just starting or because we've just closed the previous one.
             _rpcStream = _client.StreamingRecognize();
             _rpcStreamDeadline = now + s_streamTimeLimit;
@@ -237,7 +237,7 @@ namespace GoogleCloudSamples
                     {
                         Encoding = RecognitionConfig.Types.AudioEncoding.Linear16,
                         SampleRateHertz = SampleRate,
-                        LanguageCode = _myct.FromLang,//"en-US",
+                        LanguageCode = translationLanguage,// _myct.FromLang,//"en-US",
                         MaxAlternatives = 1,
                         UseEnhanced = true,
                         EnableAutomaticPunctuation = true
@@ -256,12 +256,12 @@ namespace GoogleCloudSamples
                 await WriteAudioChunk(chunk);
             }
         }
-        MyctBridge _myct;
+
         /// <summary>
         /// Processes responses received so far from the server,
         /// returning whether "exit" or "quit" have been heard.
         /// </summary>
-        private bool ProcessResponses()
+        private async Task<bool> ProcessResponses()
         {
             while (_serverResponseAvailableTask.IsCompleted && _serverResponseAvailableTask.Result)
             {
@@ -279,12 +279,22 @@ namespace GoogleCloudSamples
                 {
                     string transcript = finalResult.Alternatives[0].Transcript;
                     Console.WriteLine($"Transcript {finalResult.IsFinal}: {transcript}");
-                    _myct.SendMessage(transcript, finalResult.IsFinal);
-                    if (transcript.ToLowerInvariant().Contains("exit") ||
-                        transcript.ToLowerInvariant().Contains("quit"))
+                    if (_myct != null)
                     {
-                        return false;
+                        _lastTranscript = transcript;
+                        _lastTranscriptWasFinal = finalResult.IsFinal;
+                        
+                        //used to have an await - but it slowed it down
+                         _myct.SendMessageAsync(transcript, finalResult.IsFinal);
+
+
+
                     }
+                    //if (transcript.ToLowerInvariant().Contains("exit") ||
+                    //    transcript.ToLowerInvariant().Contains("quit"))
+                    //{
+                    //    return false;
+                    //}
 
                     TimeSpan resultEndTime = finalResult.ResultEndTime.ToTimeSpan();
 
@@ -308,6 +318,9 @@ namespace GoogleCloudSamples
                         removed++;
                     }
                 }
+
+                _hasText = true;
+                _lastText = DateTime.UtcNow;
             }
             return true;
         }
@@ -319,11 +332,42 @@ namespace GoogleCloudSamples
         /// <returns></returns>
         private async Task TransferMicrophoneChunkAsync()
         {
+
             // This will block - but only for ~100ms, unless something's really broken.
             var chunk = _microphoneBuffer.Take();
             //Console.WriteLine(("ProcessingBuffer AddLast" + chunk.Length.ToString()));
             _processingBuffer.AddLast(chunk);
-            await WriteAudioChunk(chunk);
+            try
+            {
+                await WriteAudioChunk(chunk);
+
+                if (_hasText && (DateTime.UtcNow - _lastText).TotalSeconds > 2)
+                {
+                    Console.WriteLine("pause");
+                    _processingBuffer.Clear();
+                    this._rpcStreamDeadline = DateTime.UtcNow.AddSeconds(-1);
+                    await resendLastTextToBridgeAsFinalAsync();
+                    _hasText = false;
+                }
+            }
+            catch (Grpc.Core.RpcException e)
+            {
+                Console.WriteLine("Exception writing to google - timeout\n{0}", e.Message);
+                _rpcStream = null;
+
+            }
+
+        }
+
+        private async Task resendLastTextToBridgeAsFinalAsync()
+        {
+            if (!_lastTranscriptWasFinal)
+            {
+                await _myct.SendMessageAsync(_lastTranscript, true);
+            }
+            _lastTranscript = string.Empty;
+            _lastTranscriptWasFinal = false;
+
         }
 
         /// <summary>
@@ -383,7 +427,7 @@ namespace GoogleCloudSamples
                 .ChangeSampleRate(GOOGLE_RATE) // sample rate
                 .ToSampleSource()
                 .ToWaveSource(GOOGLE_BITS_PER_SAMPLE); //bits per sample
-            
+
             var channels = GOOGLE_CHANNELS;
 
             //channels...
@@ -392,7 +436,7 @@ namespace GoogleCloudSamples
 
             _soundInSource.DataAvailable += (sender, args) =>
             {
-                
+
                 //read data from the converedSource
                 //important: don't use the e.Data here
                 //the e.Data contains the raw data provided by the 
@@ -442,107 +486,154 @@ namespace GoogleCloudSamples
         }
     }
 
-}
-
-public class MyctBridge
-{
-    public class startConversation
+    public class CommandLineOptions
     {
-        public string username { get; set; }
-        public string hostLanguage { get; set; }
-        public string guestLanguage { get; set; }
-        public string id { get; set; }
-    }
-
-    public MyctBridge(string url)
-    {
-
-        var parts = url.Split('/');
-        this._conversation = parts[parts.Length - 1];
-        var client = new RestClient("https://myct.herokuapp.com/api/info?id=" + _conversation); ;
-        client.Timeout = -1;
-        var request = new RestRequest(Method.GET);
-        request.AddHeader("Connection", "keep-alive");
-        request.AddHeader("Accept", "application/json, text/plain, */*");
-        client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
-        request.AddHeader("Sec-Fetch-Site", "same-origin");
-        request.AddHeader("Sec-Fetch-Mode", "cors");
-        request.AddHeader("Sec-Fetch-Dest", "empty");
-        request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
-        request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
-        request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
-        var response = client.Execute<startConversation>(request);
-        FromLang = response.Data.guestLanguage;
-        ToLang = response.Data.hostLanguage;
-
-        GetId();
-        SendMessage(DateTime.Now.ToString(), true);
-    }
-    public string FromLang;
-    public string ToLang;
-
-    void GetId()
-    {
-        var client = new RestClient("https://myct.herokuapp.com/api/newId");
-        client.Timeout = -1;
-        var request = new RestRequest(Method.GET);
-        request.AddHeader("Connection", "keep-alive");
-        request.AddHeader("Accept", "application/json, text/plain, */*");
-        client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
-        request.AddHeader("Sec-Fetch-Site", "same-origin");
-        request.AddHeader("Sec-Fetch-Mode", "cors");
-        request.AddHeader("Sec-Fetch-Dest", "empty");
-        request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
-        request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
-        request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
-        request.AddHeader("If-None-Match", "W/\"a-5cYL/WXzWRQrGoh7xRPqKLbDXfw\"");
-        var res = client.Execute<getIdResponse>(request);
-
-        this.id = res.Data.id;
-        Console.WriteLine("new id" + this.id);
-
-
-    }
-    string _lastMessage = null;
-    string _conversation;
-    int id = 0;
-    public void SendMessage(string what, bool final)
-    {
-        if (what == _lastMessage && !final)
-            return;
-        _lastMessage = what;
-        var client = new RestClient("https://myct.herokuapp.com/api/test");
-        client.Timeout = -1;
-        var request = new RestRequest(Method.POST);
-        request.AddHeader("Connection", "keep-alive");
-        request.AddHeader("Accept", "application/json, text/plain, */*");
-        client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
-        request.AddHeader("Content-Type", "application/json");
-        request.AddHeader("Origin", "https://myct.herokuapp.com");
-        request.AddHeader("Sec-Fetch-Site", "same-origin");
-        request.AddHeader("Sec-Fetch-Mode", "cors");
-        request.AddHeader("Sec-Fetch-Dest", "empty");
-        request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
-        request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
-        request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
-
-
-        request.AddParameter("application/json", Newtonsoft.Json.JsonConvert.SerializeObject(new myctRequest
+        public enum SourceEnum
         {
-            message = new Message
-            {
-                conversation = _conversation,
-                fromLanguage = FromLang,
-                toLanguage = ToLang,
-                presenter = false,
-                id = id,
-                text = what,
-                isFinal = final,
-                userName = "translator bot"
-            }
-        }), ParameterType.RequestBody);
-        client.Execute(request);
-        if (final)
+            Mic,
+            Loopback
+        }
+
+        
+        public string NctUrl { get; set; }
+
+        
+        public SourceEnum Source { get; set; }
+
+        
+        public string GoogleCredentialsFile { get; set; }
+    }
+
+    public class MyctBridge
+    {
+        public class startConversation
+        {
+            public string username { get; set; }
+            public string hostLanguage { get; set; }
+            public string guestLanguage { get; set; }
+            public string id { get; set; }
+        }
+
+        public MyctBridge(string url)
+        {
+
+            var parts = url.Split('/');
+            this._conversation = parts[parts.Length - 1];
+            var client = new RestClient("https://myct.herokuapp.com/api/info?id=" + _conversation); ;
+            client.Timeout = -1;
+            var request = new RestRequest(Method.GET);
+            request.AddHeader("Connection", "keep-alive");
+            request.AddHeader("Accept", "application/json, text/plain, */*");
+            client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
+            request.AddHeader("Sec-Fetch-Site", "same-origin");
+            request.AddHeader("Sec-Fetch-Mode", "cors");
+            request.AddHeader("Sec-Fetch-Dest", "empty");
+            request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
+            request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
+            request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
+            var response = client.Execute<startConversation>(request);
+            FromLang = response.Data.guestLanguage;
+            ToLang = response.Data.hostLanguage;
+
             GetId();
+            SendMessageAsync(DateTime.Now.ToString(), true).Wait();
+
+        }
+        public string FromLang;
+        public string ToLang;
+
+        void GetId()
+        {
+            var client = new RestClient("https://myct.herokuapp.com/api/newId");
+            client.Timeout = -1;
+            var request = new RestRequest(Method.GET);
+            request.AddHeader("Connection", "keep-alive");
+            request.AddHeader("Accept", "application/json, text/plain, */*");
+            client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
+            request.AddHeader("Sec-Fetch-Site", "same-origin");
+            request.AddHeader("Sec-Fetch-Mode", "cors");
+            request.AddHeader("Sec-Fetch-Dest", "empty");
+            request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
+            request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
+            request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
+            request.AddHeader("If-None-Match", "W/\"a-5cYL/WXzWRQrGoh7xRPqKLbDXfw\"");
+            var res = client.Execute<getIdResponse>(request);
+
+            this.id = res.Data.id;
+            Console.WriteLine("new id" + this.id);
+
+
+        }
+        string _lastMessage = null;
+        string _conversation;
+        int id = 0;
+        public async Task SendMessageAsync(string what, bool final)
+        {
+            if (what == _lastMessage && !final)
+                return;
+            _lastMessage = what;
+            var client = new RestClient("https://myct.herokuapp.com/api/test");
+            client.Timeout = -1;
+            var request = new RestRequest(Method.POST);
+            request.AddHeader("Connection", "keep-alive");
+            request.AddHeader("Accept", "application/json, text/plain, */*");
+            client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
+            request.AddHeader("Content-Type", "application/json");
+            request.AddHeader("Origin", "https://myct.herokuapp.com");
+            request.AddHeader("Sec-Fetch-Site", "same-origin");
+            request.AddHeader("Sec-Fetch-Mode", "cors");
+            request.AddHeader("Sec-Fetch-Dest", "empty");
+            request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
+            request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
+            request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
+
+
+            request.AddParameter("application/json", Newtonsoft.Json.JsonConvert.SerializeObject(new myctRequest
+            {
+                message = new Message
+                {
+                    conversation = _conversation,
+                    fromLanguage = FromLang,
+                    toLanguage = ToLang,
+                    presenter = false,
+                    id = id,
+                    text = what,
+                    isFinal = final,
+                    userName = "translator bot"
+                }
+            }), ParameterType.RequestBody);
+            await client.ExecuteAsync(request);
+            if (final)
+                GetId();
+        }
+    }
+
+    public class myctRequest
+    {
+        public Message message { get; set; }
+    }
+
+    public class Message
+    {
+        public string text { get; set; }
+        public string translatedText { get; set; }
+        public int id { get; set; }
+        public string userName { get; set; }
+        public bool presenter { get; set; }
+        public string fromLanguage { get; set; }
+        public string toLanguage { get; set; }
+        public string conversation { get; set; }
+        public bool isFinal { get; set; }
+    }
+
+    public class getIdResponse
+    {
+        public int id { get; set; }
+    }
+
+    public interface IInfiniteStreaming : IDisposable
+    {
+
+        Task<int> RecognizeAsync(CancellationToken ct);
     }
 }
