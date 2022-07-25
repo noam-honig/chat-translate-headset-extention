@@ -48,6 +48,7 @@ namespace GoogleCloudSamples
 
         static void Main(string[] args)
         {
+            Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", @"c:\firefly\API Project-19c1b2c511af.json");
 
 
             var ct = new CancellationTokenSource();
@@ -55,6 +56,7 @@ namespace GoogleCloudSamples
             using (var i = InfiniteStreaming.ListenToWhatsPlayingOnMyHeadset(new MyctBridge(args[0])))
             {
                 Console.WriteLine($"Listening to it, say exit to stop");
+                
                 i.RecognizeAsync(ct.Token).Wait();
 
                 ct.Cancel();
@@ -513,13 +515,15 @@ namespace GoogleCloudSamples
             public string guestLanguage { get; set; }
             public string id { get; set; }
         }
-
+        string address = "https://myct.herokuapp.com";
         public MyctBridge(string url)
         {
 
             var parts = url.Split('/');
             this._conversation = parts[parts.Length - 1];
-            var client = new RestClient("https://myct.herokuapp.com/api/info?id=" + _conversation); ;
+            if (parts[2].StartsWith("localhost"))
+                address = "http://" + parts[2];
+            var client= new RestClient(address+"/api/info?id=" + _conversation); ;
             client.Timeout = -1;
             var request = new RestRequest(Method.GET);
             request.AddHeader("Connection", "keep-alive");
@@ -528,7 +532,7 @@ namespace GoogleCloudSamples
             request.AddHeader("Sec-Fetch-Site", "same-origin");
             request.AddHeader("Sec-Fetch-Mode", "cors");
             request.AddHeader("Sec-Fetch-Dest", "empty");
-            request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
+            
             request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
             request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
             var response = client.Execute<startConversation>(request);
@@ -544,7 +548,7 @@ namespace GoogleCloudSamples
 
         void GetId()
         {
-            var client = new RestClient("https://myct.herokuapp.com/api/newId");
+            var client = new RestClient(address+"/api/newId");
             client.Timeout = -1;
             var request = new RestRequest(Method.GET);
             request.AddHeader("Connection", "keep-alive");
@@ -553,7 +557,6 @@ namespace GoogleCloudSamples
             request.AddHeader("Sec-Fetch-Site", "same-origin");
             request.AddHeader("Sec-Fetch-Mode", "cors");
             request.AddHeader("Sec-Fetch-Dest", "empty");
-            request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
             request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
             request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
             request.AddHeader("If-None-Match", "W/\"a-5cYL/WXzWRQrGoh7xRPqKLbDXfw\"");
@@ -572,18 +575,16 @@ namespace GoogleCloudSamples
             if (what == _lastMessage && !final)
                 return;
             _lastMessage = what;
-            var client = new RestClient("https://myct.herokuapp.com/api/test");
+            var client = new RestClient(address+"/api/test");
             client.Timeout = -1;
             var request = new RestRequest(Method.POST);
             request.AddHeader("Connection", "keep-alive");
             request.AddHeader("Accept", "application/json, text/plain, */*");
             client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
             request.AddHeader("Content-Type", "application/json");
-            request.AddHeader("Origin", "https://myct.herokuapp.com");
             request.AddHeader("Sec-Fetch-Site", "same-origin");
             request.AddHeader("Sec-Fetch-Mode", "cors");
             request.AddHeader("Sec-Fetch-Dest", "empty");
-            request.AddHeader("Referer", "https://myct.herokuapp.com/hp5ao");
             request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
             request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
 
