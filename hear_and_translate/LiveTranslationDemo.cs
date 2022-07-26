@@ -56,7 +56,7 @@ namespace GoogleCloudSamples
             using (var i = InfiniteStreaming.ListenToWhatsPlayingOnMyHeadset(new MyctBridge(args[0])))
             {
                 Console.WriteLine($"Listening to it, say exit to stop");
-                
+
                 i.RecognizeAsync(ct.Token).Wait();
 
                 ct.Cancel();
@@ -285,9 +285,9 @@ namespace GoogleCloudSamples
                     {
                         _lastTranscript = transcript;
                         _lastTranscriptWasFinal = finalResult.IsFinal;
-                        
+
                         //used to have an await - but it slowed it down
-                         _myct.SendMessageAsync(transcript, finalResult.IsFinal);
+                        _myct.SendMessageAsync(transcript, finalResult.IsFinal);
 
 
 
@@ -496,13 +496,13 @@ namespace GoogleCloudSamples
             Loopback
         }
 
-        
+
         public string NctUrl { get; set; }
 
-        
+
         public SourceEnum Source { get; set; }
 
-        
+
         public string GoogleCredentialsFile { get; set; }
     }
 
@@ -523,7 +523,7 @@ namespace GoogleCloudSamples
             this._conversation = parts[parts.Length - 1];
             if (parts[2].StartsWith("localhost"))
                 address = "http://" + parts[2];
-            var client= new RestClient(address+"/api/info?id=" + _conversation); ;
+            var client = new RestClient(address + "/api/info?id=" + _conversation); ;
             client.Timeout = -1;
             var request = new RestRequest(Method.GET);
             request.AddHeader("Connection", "keep-alive");
@@ -532,7 +532,7 @@ namespace GoogleCloudSamples
             request.AddHeader("Sec-Fetch-Site", "same-origin");
             request.AddHeader("Sec-Fetch-Mode", "cors");
             request.AddHeader("Sec-Fetch-Dest", "empty");
-            
+
             request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
             request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
             var response = client.Execute<startConversation>(request);
@@ -548,22 +548,33 @@ namespace GoogleCloudSamples
 
         void GetId()
         {
-            var client = new RestClient(address+"/api/newId");
-            client.Timeout = -1;
-            var request = new RestRequest(Method.GET);
-            request.AddHeader("Connection", "keep-alive");
-            request.AddHeader("Accept", "application/json, text/plain, */*");
-            client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
-            request.AddHeader("Sec-Fetch-Site", "same-origin");
-            request.AddHeader("Sec-Fetch-Mode", "cors");
-            request.AddHeader("Sec-Fetch-Dest", "empty");
-            request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
-            request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
-            request.AddHeader("If-None-Match", "W/\"a-5cYL/WXzWRQrGoh7xRPqKLbDXfw\"");
-            var res = client.Execute<getIdResponse>(request);
-
-            this.id = res.Data.id;
-            Console.WriteLine("new id" + this.id);
+            var ok = false;
+            while (!ok)
+            {
+                var client = new RestClient(address + "/api/newId");
+                client.Timeout = -1;
+                var request = new RestRequest(Method.GET);
+                request.AddHeader("Connection", "keep-alive");
+                request.AddHeader("Accept", "application/json, text/plain, */*");
+                client.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
+                request.AddHeader("Sec-Fetch-Site", "same-origin");
+                request.AddHeader("Sec-Fetch-Mode", "cors");
+                request.AddHeader("Sec-Fetch-Dest", "empty");
+                request.AddHeader("Accept-Language", "en,en-US;q=0.9,en-GB;q=0.8,he;q=0.7,de-DE;q=0.6,de;q=0.5");
+                request.AddHeader("Cookie", "_ga=GA1.3.604060840.1558850067; _gid=GA1.3.731202341.1608561129; _gat_gtag_UA_140788936_1=1");
+                request.AddHeader("If-None-Match", "W/\"a-5cYL/WXzWRQrGoh7xRPqKLbDXfw\"");
+                var res = client.Execute<getIdResponse>(request);
+                if (res.IsSuccessful)
+                {
+                    ok = true;
+                    this.id = res.Data.id;
+                    Console.WriteLine("new id" + this.id);
+                }
+                else
+                {
+                    Console.WriteLine("new id failed, retrying");
+                }
+            }
 
 
         }
@@ -575,7 +586,7 @@ namespace GoogleCloudSamples
             if (what == _lastMessage && !final)
                 return;
             _lastMessage = what;
-            var client = new RestClient(address+"/api/test");
+            var client = new RestClient(address + "/api/test");
             client.Timeout = -1;
             var request = new RestRequest(Method.POST);
             request.AddHeader("Connection", "keep-alive");
